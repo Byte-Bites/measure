@@ -1,0 +1,903 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
+<title>G-Code Illustrator</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Noto+Sans+JP:wght@300;400;500;700&display=swap');
+
+  :root {
+    --bg-dark: #0d0f12;
+    --bg-panel: #161a20;
+    --bg-surface: #1c2028;
+    --bg-hover: #242a34;
+    --border: #2a3040;
+    --border-active: #4a90d9;
+    --text-primary: #e8ecf2;
+    --text-secondary: #8892a4;
+    --text-muted: #5a6478;
+    --accent: #4a90d9;
+    --accent-glow: rgba(74, 144, 217, 0.3);
+    --danger: #d94a4a;
+    --danger-glow: rgba(217, 74, 74, 0.2);
+    --success: #4ad97a;
+    --success-glow: rgba(74, 217, 122, 0.2);
+    --canvas-bg: #ffffff;
+    --stroke-color: #e87a1c;
+    --grid-line: rgba(74, 144, 217, 0.08);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  html, body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    font-family: 'Noto Sans JP', 'IBM Plex Mono', sans-serif;
+    background: var(--bg-dark);
+    color: var(--text-primary);
+    touch-action: none;
+  }
+
+  .app {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+  }
+
+  /* ── Header ── */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    z-index: 10;
+    min-height: 52px;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .logo-icon {
+    width: 32px; height: 32px;
+    background: linear-gradient(135deg, var(--accent), #7b61ff);
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px;
+    box-shadow: 0 2px 8px var(--accent-glow);
+  }
+
+  .logo-text {
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 600;
+    font-size: 15px;
+    letter-spacing: -0.5px;
+    color: var(--text-primary);
+  }
+
+  .logo-sub {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-weight: 300;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  .header-actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+
+  /* ── Buttons ── */
+  .btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    font-family: 'Noto Sans JP', sans-serif;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  .btn:active {
+    transform: scale(0.96);
+    background: var(--bg-hover);
+  }
+
+  .btn-icon {
+    padding: 8px 10px;
+  }
+
+  .btn-danger {
+    border-color: rgba(217, 74, 74, 0.3);
+    color: var(--danger);
+  }
+  .btn-danger:active { background: var(--danger-glow); }
+
+  .btn-accent {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    box-shadow: 0 2px 12px var(--accent-glow);
+  }
+  .btn-accent:active {
+    background: #3a7dc5;
+    transform: scale(0.96);
+  }
+
+  .btn-success {
+    background: var(--success);
+    border-color: var(--success);
+    color: #0d0f12;
+    box-shadow: 0 2px 12px var(--success-glow);
+    font-weight: 600;
+  }
+  .btn-success:active { background: #3bc066; transform: scale(0.96); }
+
+  .btn svg { width: 16px; height: 16px; flex-shrink: 0; }
+
+  .btn:disabled {
+    opacity: 0.35;
+    pointer-events: none;
+  }
+
+  /* ── Canvas Area ── */
+  .canvas-container {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    background: var(--bg-dark);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .canvas-wrapper {
+    position: relative;
+    background: var(--canvas-bg);
+    border-radius: 4px;
+    box-shadow: 0 4px 40px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05);
+  }
+
+  canvas {
+    display: block;
+    border-radius: 4px;
+    touch-action: none;
+  }
+
+  #drawCanvas {
+    position: absolute;
+    top: 0; left: 0;
+    z-index: 2;
+    cursor: crosshair;
+  }
+
+  #displayCanvas {
+    position: relative;
+    z-index: 1;
+  }
+
+  /* ── Toolbar (bottom) ── */
+  .toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 8px 16px;
+    background: var(--bg-panel);
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+    flex-wrap: wrap;
+    min-height: 52px;
+  }
+
+  .toolbar-group {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 8px;
+    border-right: 1px solid var(--border);
+  }
+  .toolbar-group:last-child { border-right: none; }
+
+  .toolbar-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-right: 6px;
+    white-space: nowrap;
+  }
+
+  .input-field {
+    width: 70px;
+    padding: 6px 8px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    text-align: center;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .input-field:focus { border-color: var(--accent); }
+
+  .input-unit {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-left: 2px;
+  }
+
+  /* ── Stroke Width Control ── */
+  .stroke-control {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .stroke-preview {
+    width: 28px;
+    height: 28px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .stroke-dot {
+    border-radius: 50%;
+    background: var(--text-primary);
+  }
+
+  /* ── Modal ── */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.7);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(4px);
+  }
+  .modal-overlay.active { display: flex; }
+
+  .modal {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 24px;
+    width: 90%;
+    max-width: 500px;
+    max-height: 80vh;
+    overflow-y: auto;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  }
+
+  .modal h2 {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    color: var(--text-primary);
+  }
+
+  .modal-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .modal-row:last-child { border-bottom: none; }
+
+  .modal-row label {
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+
+  .modal-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 20px;
+    justify-content: flex-end;
+  }
+
+  .gcode-preview {
+    background: var(--bg-dark);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--success);
+    max-height: 200px;
+    overflow-y: auto;
+    line-height: 1.6;
+    white-space: pre;
+    margin-top: 12px;
+  }
+
+  /* ── Status Bar ── */
+  .status-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 16px;
+    background: var(--bg-dark);
+    border-top: 1px solid var(--border);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  .status-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--success);
+    display: inline-block;
+    margin-right: 6px;
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  /* ── Pen indicator ── */
+  .pen-indicator {
+    position: fixed;
+    top: 60px;
+    right: 16px;
+    padding: 6px 12px;
+    background: var(--accent);
+    color: #fff;
+    border-radius: 20px;
+    font-size: 11px;
+    font-family: 'IBM Plex Mono', monospace;
+    opacity: 0;
+    transition: opacity 0.3s;
+    z-index: 20;
+    pointer-events: none;
+  }
+  .pen-indicator.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- Header -->
+  <div class="header">
+    <div class="logo">
+      <div class="logo-icon">⬡</div>
+      <div>
+        <div class="logo-text">G-Code Illustrator</div>
+        <div class="logo-sub">Vector → G-Code</div>
+      </div>
+    </div>
+    <div class="header-actions">
+      <button class="btn btn-icon" id="btnUndo" disabled title="元に戻す">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10h10a5 5 0 0 1 0 10H9"/><path d="M3 10l4-4M3 10l4 4"/></svg>
+      </button>
+      <button class="btn btn-danger btn-icon" id="btnClear" title="全消去">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2M5 6v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V6"/><path d="M10 11v6M14 11v6"/></svg>
+      </button>
+      <button class="btn btn-success" id="btnGenerate">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+        G-Code 生成
+      </button>
+    </div>
+  </div>
+
+  <!-- Canvas -->
+  <div class="canvas-container" id="canvasContainer">
+    <div class="canvas-wrapper" id="canvasWrapper">
+      <canvas id="displayCanvas"></canvas>
+      <canvas id="drawCanvas"></canvas>
+    </div>
+  </div>
+
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <div class="toolbar-group">
+      <span class="toolbar-label">線幅</span>
+      <div class="stroke-control">
+        <button class="btn btn-icon" id="btnStrokeMinus">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
+        <div class="stroke-preview">
+          <div class="stroke-dot" id="strokeDot"></div>
+        </div>
+        <button class="btn btn-icon" id="btnStrokePlus">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="toolbar-group">
+      <span class="toolbar-label">レイヤーピッチ</span>
+      <input type="number" class="input-field" id="layerPitch" value="0.2" step="0.05" min="0.05">
+      <span class="input-unit">mm</span>
+    </div>
+    <div class="toolbar-group">
+      <span class="toolbar-label">造形層数</span>
+      <input type="number" class="input-field" id="layerCount" value="1" step="1" min="1" max="999">
+      <span class="input-unit">層</span>
+    </div>
+    <div class="toolbar-group">
+      <span class="toolbar-label">ベッドサイズ</span>
+      <input type="number" class="input-field" id="bedWidth" value="200" step="10" min="10">
+      <span class="input-unit">×</span>
+      <input type="number" class="input-field" id="bedHeight" value="200" step="10" min="10">
+      <span class="input-unit">mm</span>
+    </div>
+    <div class="toolbar-group">
+      <span class="toolbar-label">ノズル径</span>
+      <input type="number" class="input-field" id="nozzleDia" value="0.4" step="0.05" min="0.1" max="2.0">
+      <span class="input-unit">mm</span>
+    </div>
+    <div class="toolbar-group">
+      <span class="toolbar-label">フィラメント径</span>
+      <input type="number" class="input-field" id="filamentDia" value="1.75" step="0.05" min="1.0" max="3.0">
+      <span class="input-unit">mm</span>
+    </div>
+  </div>
+
+  <!-- Status -->
+  <div class="status-bar">
+    <div><span class="status-dot"></span><span id="statusText">Apple Pencil 対応 — 描画してください</span></div>
+    <div id="pathCount">パス: 0</div>
+  </div>
+</div>
+
+<!-- Pen indicator -->
+<div class="pen-indicator" id="penIndicator">✏️ Pencil</div>
+
+<!-- G-Code Modal -->
+<div class="modal-overlay" id="gcodeModal">
+  <div class="modal">
+    <h2>⬡ G-Code 生成結果</h2>
+    <div class="modal-row">
+      <label>総パス数</label>
+      <span id="modalPaths" style="font-family:'IBM Plex Mono';color:var(--accent);">0</span>
+    </div>
+    <div class="modal-row">
+      <label>レイヤーピッチ</label>
+      <span id="modalPitch" style="font-family:'IBM Plex Mono';color:var(--accent);">0.2mm</span>
+    </div>
+    <div class="modal-row">
+      <label>造形層数</label>
+      <span id="modalLayers" style="font-family:'IBM Plex Mono';color:var(--accent);">1</span>
+    </div>
+    <div class="modal-row">
+      <label>総行数</label>
+      <span id="modalLines" style="font-family:'IBM Plex Mono';color:var(--accent);">0</span>
+    </div>
+    <div class="modal-row">
+      <label>総吐出量 (E)</label>
+      <span id="modalExtrusion" style="font-family:'IBM Plex Mono';color:var(--accent);">0mm</span>
+    </div>
+    <div class="gcode-preview" id="gcodePreview"></div>
+    <div class="modal-actions">
+      <button class="btn" id="btnCloseModal">閉じる</button>
+      <button class="btn btn-accent" id="btnDownload">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        ダウンロード .gcode
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  // ── State ──
+  const state = {
+    paths: [],       // Array of { points: [{x,y,pressure}], strokeWidth }
+    undoStack: [],
+    currentPath: null,
+    strokeWidth: 4,
+    isDrawing: false,
+    gcodeResult: ''
+  };
+
+  // ── Elements ──
+  const container = document.getElementById('canvasContainer');
+  const wrapper = document.getElementById('canvasWrapper');
+  const displayCanvas = document.getElementById('displayCanvas');
+  const drawCanvas = document.getElementById('drawCanvas');
+  const displayCtx = displayCanvas.getContext('2d');
+  const drawCtx = drawCanvas.getContext('2d');
+  const penIndicator = document.getElementById('penIndicator');
+
+  // ── Canvas sizing ──
+  function resizeCanvas() {
+    const rect = container.getBoundingClientRect();
+    const pad = 24;
+    const maxW = rect.width - pad * 2;
+    const maxH = rect.height - pad * 2;
+    const aspect = 1; // square canvas
+    let w, h;
+    if (maxW / maxH > aspect) {
+      h = maxH;
+      w = h * aspect;
+    } else {
+      w = maxW;
+      h = w / aspect;
+    }
+    w = Math.floor(w);
+    h = Math.floor(h);
+
+    const dpr = window.devicePixelRatio || 1;
+    displayCanvas.width = w * dpr;
+    displayCanvas.height = h * dpr;
+    drawCanvas.width = w * dpr;
+    drawCanvas.height = h * dpr;
+    displayCanvas.style.width = w + 'px';
+    displayCanvas.style.height = h + 'px';
+    drawCanvas.style.width = w + 'px';
+    drawCanvas.style.height = h + 'px';
+    wrapper.style.width = w + 'px';
+    wrapper.style.height = h + 'px';
+
+    displayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    drawCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    redrawDisplay();
+  }
+
+  // ── Drawing ──
+  function getPos(e) {
+    const rect = drawCanvas.getBoundingClientRect();
+    const touch = e.touches ? e.touches[0] : e;
+    return {
+      x: touch.clientX - rect.left,
+      y: touch.clientY - rect.top,
+      pressure: e.pressure !== undefined ? e.pressure : 0.5
+    };
+  }
+
+  function startDraw(e) {
+    // Show pen indicator for stylus
+    if (e.pointerType === 'pen') {
+      penIndicator.classList.add('show');
+      setTimeout(() => penIndicator.classList.remove('show'), 1000);
+    }
+
+    e.preventDefault();
+    state.isDrawing = true;
+    const pos = getPos(e);
+    state.currentPath = {
+      points: [pos],
+      strokeWidth: state.strokeWidth
+    };
+    drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+    drawCtx.beginPath();
+    drawCtx.moveTo(pos.x, pos.y);
+    drawCtx.strokeStyle = '#e87a1c';
+    drawCtx.lineWidth = state.strokeWidth;
+    drawCtx.lineCap = 'round';
+    drawCtx.lineJoin = 'round';
+  }
+
+  function moveDraw(e) {
+    if (!state.isDrawing || !state.currentPath) return;
+    e.preventDefault();
+    const pos = getPos(e);
+    state.currentPath.points.push(pos);
+
+    // Dynamic width based on pressure for Apple Pencil
+    const pressure = pos.pressure || 0.5;
+    const dynamicWidth = state.strokeWidth * (0.5 + pressure);
+
+    drawCtx.lineWidth = dynamicWidth;
+    drawCtx.lineTo(pos.x, pos.y);
+    drawCtx.stroke();
+    drawCtx.beginPath();
+    drawCtx.moveTo(pos.x, pos.y);
+  }
+
+  function endDraw(e) {
+    if (!state.isDrawing || !state.currentPath) return;
+    e.preventDefault();
+    state.isDrawing = false;
+
+    if (state.currentPath.points.length > 1) {
+      // Simplify path (Ramer-Douglas-Peucker)
+      const simplified = simplifyPath(state.currentPath.points, 1.0);
+      state.currentPath.points = simplified;
+      state.undoStack.push([...state.paths.map(p => ({...p, points: [...p.points]}))]);
+      state.paths.push(state.currentPath);
+      updateUI();
+    }
+    state.currentPath = null;
+    drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+    redrawDisplay();
+  }
+
+  // ── Simplification (RDP) ──
+  function simplifyPath(points, epsilon) {
+    if (points.length <= 2) return points;
+    let maxDist = 0, maxIdx = 0;
+    const start = points[0], end = points[points.length - 1];
+    for (let i = 1; i < points.length - 1; i++) {
+      const d = perpDist(points[i], start, end);
+      if (d > maxDist) { maxDist = d; maxIdx = i; }
+    }
+    if (maxDist > epsilon) {
+      const left = simplifyPath(points.slice(0, maxIdx + 1), epsilon);
+      const right = simplifyPath(points.slice(maxIdx), epsilon);
+      return left.slice(0, -1).concat(right);
+    }
+    return [start, end];
+  }
+
+  function perpDist(p, a, b) {
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (len === 0) return Math.sqrt((p.x - a.x) ** 2 + (p.y - a.y) ** 2);
+    return Math.abs(dy * p.x - dx * p.y + b.x * a.y - b.y * a.x) / len;
+  }
+
+  // ── Redraw ──
+  function redrawDisplay() {
+    const w = parseFloat(displayCanvas.style.width);
+    const h = parseFloat(displayCanvas.style.height);
+    displayCtx.clearRect(0, 0, w, h);
+
+    // Grid
+    displayCtx.strokeStyle = 'rgba(74, 144, 217, 0.06)';
+    displayCtx.lineWidth = 0.5;
+    const gridSize = 20;
+    for (let x = gridSize; x < w; x += gridSize) {
+      displayCtx.beginPath();
+      displayCtx.moveTo(x, 0);
+      displayCtx.lineTo(x, h);
+      displayCtx.stroke();
+    }
+    for (let y = gridSize; y < h; y += gridSize) {
+      displayCtx.beginPath();
+      displayCtx.moveTo(0, y);
+      displayCtx.lineTo(w, y);
+      displayCtx.stroke();
+    }
+
+    // Draw all paths
+    state.paths.forEach(path => {
+      if (path.points.length < 2) return;
+      displayCtx.beginPath();
+      displayCtx.strokeStyle = '#e87a1c';
+      displayCtx.lineWidth = path.strokeWidth;
+      displayCtx.lineCap = 'round';
+      displayCtx.lineJoin = 'round';
+      displayCtx.moveTo(path.points[0].x, path.points[0].y);
+      for (let i = 1; i < path.points.length; i++) {
+        displayCtx.lineTo(path.points[i].x, path.points[i].y);
+      }
+      displayCtx.stroke();
+    });
+  }
+
+  // ── UI Updates ──
+  function updateUI() {
+    document.getElementById('btnUndo').disabled = state.paths.length === 0;
+    document.getElementById('pathCount').textContent = `パス: ${state.paths.length}`;
+    document.getElementById('statusText').textContent =
+      state.paths.length > 0
+        ? `${state.paths.length} パス — 合計 ${state.paths.reduce((s, p) => s + p.points.length, 0)} 頂点`
+        : 'Apple Pencil 対応 — 描画してください';
+    updateStrokeDot();
+  }
+
+  function updateStrokeDot() {
+    const dot = document.getElementById('strokeDot');
+    const size = Math.max(3, Math.min(16, state.strokeWidth * 2));
+    dot.style.width = size + 'px';
+    dot.style.height = size + 'px';
+  }
+
+  // ── G-Code Generation ──
+  function generateGCode() {
+    if (state.paths.length === 0) return;
+
+    const pitch = parseFloat(document.getElementById('layerPitch').value) || 0.2;
+    const layers = parseInt(document.getElementById('layerCount').value) || 1;
+    const bedW = parseFloat(document.getElementById('bedWidth').value) || 200;
+    const bedH = parseFloat(document.getElementById('bedHeight').value) || 200;
+    const nozzleDia = parseFloat(document.getElementById('nozzleDia').value) || 0.4;
+    const filamentDia = parseFloat(document.getElementById('filamentDia').value) || 1.75;
+
+    const canvasW = parseFloat(displayCanvas.style.width);
+    const canvasH = parseFloat(displayCanvas.style.height);
+    const scaleX = bedW / canvasW;
+    const scaleY = bedH / canvasH;
+
+    // Extrusion: cross-section of deposited bead / cross-section of filament
+    // Bead cross-section ≈ nozzleDia × layerHeight (rectangular approximation)
+    const filamentArea = Math.PI * (filamentDia / 2) ** 2;
+    const beadArea = nozzleDia * pitch;
+    const extrusionMultiplier = beadArea / filamentArea;
+
+    let totalE = 0;
+
+    const lines = [];
+    lines.push('; G-Code generated by G-Code Illustrator');
+    lines.push(`; Paths: ${state.paths.length}`);
+    lines.push(`; Layers: ${layers}, Pitch: ${pitch}mm`);
+    lines.push(`; Bed: ${bedW}x${bedH}mm`);
+    lines.push(`; Nozzle: ${nozzleDia}mm, Filament: ${filamentDia}mm`);
+    lines.push(`; Extrusion multiplier: ${extrusionMultiplier.toFixed(5)} mm/mm`);
+    lines.push('');
+    lines.push('G21 ; mm units');
+    lines.push('G90 ; absolute positioning');
+    lines.push('M82 ; absolute extrusion');
+    lines.push('G28 ; home all axes');
+    lines.push('G92 E0 ; reset extruder');
+    lines.push('');
+
+    for (let layer = 0; layer < layers; layer++) {
+      const z = ((layer + 1) * pitch).toFixed(3);
+      lines.push(`; === Layer ${layer + 1} / ${layers} — Z=${z}mm ===`);
+      lines.push(`G1 Z${z} F300`);
+      lines.push('');
+
+      state.paths.forEach((path, pi) => {
+        if (path.points.length < 2) return;
+        const first = path.points[0];
+        const fx = (first.x * scaleX).toFixed(3);
+        const fy = ((canvasH - first.y) * scaleY).toFixed(3);
+
+        lines.push(`; Path ${pi + 1}`);
+        // Retract before travel
+        totalE -= 1.0;
+        lines.push(`G1 E${totalE.toFixed(4)} F2400 ; retract`);
+        lines.push(`G0 X${fx} Y${fy} ; move to start`);
+        // Un-retract
+        totalE += 1.0;
+        lines.push(`G1 E${totalE.toFixed(4)} F2400 ; un-retract`);
+
+        let prevX = first.x * scaleX;
+        let prevY = (canvasH - first.y) * scaleY;
+
+        for (let i = 1; i < path.points.length; i++) {
+          const pt = path.points[i];
+          const px = pt.x * scaleX;
+          const py = (canvasH - pt.y) * scaleY;
+
+          // Calculate distance between points
+          const dist = Math.sqrt((px - prevX) ** 2 + (py - prevY) ** 2);
+          // E = distance × extrusion multiplier
+          totalE += dist * extrusionMultiplier;
+
+          lines.push(`G1 X${px.toFixed(3)} Y${py.toFixed(3)} E${totalE.toFixed(4)} F600`);
+          prevX = px;
+          prevY = py;
+        }
+        lines.push('');
+      });
+    }
+
+    // Final retract & end
+    totalE -= 1.0;
+    lines.push(`G1 E${totalE.toFixed(4)} F2400 ; final retract`);
+    lines.push('G0 Z10 ; lift');
+    lines.push('G28 X Y ; home XY');
+    lines.push('M84 ; disable motors');
+    lines.push('; end');
+
+    state.gcodeResult = lines.join('\n');
+
+    // Show modal
+    document.getElementById('modalPaths').textContent = state.paths.length;
+    document.getElementById('modalPitch').textContent = pitch + 'mm';
+    document.getElementById('modalLayers').textContent = layers;
+    document.getElementById('modalLines').textContent = lines.length;
+    document.getElementById('modalExtrusion').textContent = totalE.toFixed(2) + 'mm';
+
+    const preview = document.getElementById('gcodePreview');
+    const previewLines = lines.slice(0, 40).join('\n');
+    preview.textContent = previewLines + (lines.length > 40 ? '\n...' : '');
+
+    document.getElementById('gcodeModal').classList.add('active');
+  }
+
+  // ── Download ──
+  function downloadGCode() {
+    if (!state.gcodeResult) return;
+    const blob = new Blob([state.gcodeResult], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'illustration.gcode';
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // ── Event Listeners ──
+  drawCanvas.addEventListener('pointerdown', startDraw, { passive: false });
+  drawCanvas.addEventListener('pointermove', moveDraw, { passive: false });
+  drawCanvas.addEventListener('pointerup', endDraw, { passive: false });
+  drawCanvas.addEventListener('pointercancel', endDraw, { passive: false });
+  drawCanvas.addEventListener('pointerleave', endDraw, { passive: false });
+
+  // Prevent scroll on canvas
+  drawCanvas.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
+  drawCanvas.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+
+  // Undo
+  document.getElementById('btnUndo').addEventListener('click', () => {
+    if (state.undoStack.length > 0) {
+      state.paths = state.undoStack.pop();
+    } else {
+      state.paths = [];
+    }
+    updateUI();
+    redrawDisplay();
+  });
+
+  // Clear
+  document.getElementById('btnClear').addEventListener('click', () => {
+    if (state.paths.length === 0) return;
+    state.undoStack.push([...state.paths.map(p => ({...p, points: [...p.points]}))]);
+    state.paths = [];
+    updateUI();
+    redrawDisplay();
+  });
+
+  // Stroke width
+  document.getElementById('btnStrokeMinus').addEventListener('click', () => {
+    state.strokeWidth = Math.max(0.5, state.strokeWidth - 0.5);
+    updateStrokeDot();
+  });
+  document.getElementById('btnStrokePlus').addEventListener('click', () => {
+    state.strokeWidth = Math.min(16, state.strokeWidth + 0.5);
+    updateStrokeDot();
+  });
+
+  // Generate
+  document.getElementById('btnGenerate').addEventListener('click', generateGCode);
+
+  // Modal
+  document.getElementById('btnCloseModal').addEventListener('click', () => {
+    document.getElementById('gcodeModal').classList.remove('active');
+  });
+  document.getElementById('btnDownload').addEventListener('click', downloadGCode);
+  document.getElementById('gcodeModal').addEventListener('click', (e) => {
+    if (e.target === document.getElementById('gcodeModal')) {
+      document.getElementById('gcodeModal').classList.remove('active');
+    }
+  });
+
+  // Resize
+  window.addEventListener('resize', resizeCanvas);
+
+  // Init
+  resizeCanvas();
+  updateUI();
+})();
+</script>
+</body>
+</html>
