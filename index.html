@@ -515,13 +515,6 @@
       <input type="number" class="input-field" id="layerCount" value="2" step="1" min="1" max="999">
       <span class="input-unit">層</span>
     </div>
-    <div class="toolbar-group">
-      <span class="toolbar-label">ベッドサイズ</span>
-      <input type="number" class="input-field" id="bedWidth" value="200" step="10" min="10">
-      <span class="input-unit">×</span>
-      <input type="number" class="input-field" id="bedHeight" value="200" step="10" min="10">
-      <span class="input-unit">mm</span>
-    </div>
   </div>
 
   <div class="status-bar">
@@ -573,7 +566,7 @@
     paths: [],
     undoStack: [],
     currentPath: null,
-    strokeWidth: 6,
+    strokeWidth: 10,
     isDrawing: false,
     gcodeResult: '',
     pencilOnly: true
@@ -752,8 +745,7 @@
     if (state.paths.length === 0) return;
     const pitch = parseFloat(document.getElementById('layerPitch').value) || 0.2;
     const layers = parseInt(document.getElementById('layerCount').value) || 1;
-    const bedW = parseFloat(document.getElementById('bedWidth').value) || 200;
-    const bedH = parseFloat(document.getElementById('bedHeight').value) || 200;
+    const bedW = 140, bedH = 140;
     const nozzleDia = 0.4;
     const filamentDia = 1.75;
     const canvasW = parseFloat(displayCanvas.style.width);
@@ -825,7 +817,10 @@
     const blob = new Blob([state.gcodeResult], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = 'illustration.gcode'; a.click();
+    const now = new Date();
+    const d = String(now.getFullYear()) + String(now.getMonth()+1).padStart(2,'0') + String(now.getDate()).padStart(2,'0');
+    const t = String(now.getHours()).padStart(2,'0') + String(now.getMinutes()).padStart(2,'0');
+    a.href = url; a.download = `CP_${d}_${t}.gcode`; a.click();
     URL.revokeObjectURL(url);
   }
 
@@ -862,7 +857,7 @@
     state.strokeWidth = Math.max(0.5, state.strokeWidth - 0.5); updateStrokeDot();
   });
   document.getElementById('btnStrokePlus').addEventListener('click', () => {
-    state.strokeWidth = Math.min(16, state.strokeWidth + 0.5); updateStrokeDot();
+    state.strokeWidth = Math.min(24, state.strokeWidth + 0.5); updateStrokeDot();
   });
 
   document.getElementById('btnGenerate').addEventListener('click', generateGCode);
