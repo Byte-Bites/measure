@@ -452,6 +452,31 @@
     backdrop-filter: blur(8px);
   }
   .touch-blocked.show { opacity: 1; }
+
+  /* ── Eraser cursor ── */
+  .eraser-cursor {
+    position: fixed;
+    pointer-events: none;
+    z-index: 30;
+    border: 2px solid var(--danger);
+    border-radius: 50%;
+    background: rgba(255, 90, 114, 0.1);
+    transform: translate(-50%, -50%);
+    display: none;
+  }
+  .eraser-cursor.show { display: block; }
+
+  /* ── Mode button active state ── */
+  .btn-mode-active {
+    border-color: var(--accent) !important;
+    color: var(--accent) !important;
+    box-shadow: 0 0 8px var(--accent-glow) !important;
+  }
+  .btn-eraser-active {
+    border-color: var(--danger) !important;
+    color: var(--danger) !important;
+    box-shadow: 0 0 8px var(--danger-glow) !important;
+  }
 </style>
 </head>
 <body>
@@ -469,6 +494,12 @@
       <button class="pencil-toggle active" id="btnPencilOnly" title="Apple Pencilのみ">
         <div class="toggle-dot"></div>
         <span>✏️ Pencilのみ</span>
+      </button>
+      <button class="btn btn-icon" id="btnModePen" title="ペン" style="border-color:var(--accent);color:var(--accent);box-shadow:0 0 8px var(--accent-glow);">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg>
+      </button>
+      <button class="btn btn-icon" id="btnModeEraser" title="消しゴム">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 20H7L3 16c-.8-.8-.8-2 0-2.8L14.6 1.6c.8-.8 2-.8 2.8 0l5 5c.8.8.8 2 0 2.8L12 20"/><path d="M6 11l7 7"/></svg>
       </button>
       <button class="btn btn-icon" id="btnUndo" disabled title="元に戻す">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10h10a5 5 0 0 1 0 10H9"/><path d="M3 10l4-4M3 10l4 4"/></svg>
@@ -525,6 +556,7 @@
 
 <div class="pen-indicator" id="penIndicator">✏️ Pencil 検出</div>
 <div class="touch-blocked" id="touchBlocked">🖐 指タッチはブロック中（Pencilのみモード）</div>
+<div class="eraser-cursor" id="eraserCursor"></div>
 
 <div class="modal-overlay" id="gcodeModal">
   <div class="modal">
@@ -569,7 +601,9 @@
     strokeWidth: 10,
     isDrawing: false,
     gcodeResult: '',
-    pencilOnly: true
+    pencilOnly: true,
+    mode: 'pen',        // 'pen' or 'eraser'
+    eraserRadius: 12     // eraser radius in canvas px
   };
 
   const container = document.getElementById('canvasContainer');
@@ -580,6 +614,7 @@
   const drawCtx = drawCanvas.getContext('2d');
   const penIndicator = document.getElementById('penIndicator');
   const touchBlocked = document.getElementById('touchBlocked');
+  const eraserCursor = document.getElementById('eraserCursor');
   let touchBlockedTimer = null;
 
   function resizeCanvas() {
@@ -634,6 +669,16 @@
     }
     e.preventDefault();
     state.isDrawing = true;
+
+    if (state.mode === 'eraser') {
+      // Save undo state once at start of eraser stroke
+      state._eraserUndoSaved = false;
+      const pos = getPos(e);
+      eraseAtPoint(pos);
+      updateEraserCursor(e);
+      return;
+    }
+
     const pos = getPos(e);
     state.currentPath = { points: [pos], strokeWidth: state.strokeWidth };
     drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
@@ -646,8 +691,17 @@
   }
 
   function moveDraw(e) {
-    if (!state.isDrawing || !state.currentPath) return;
+    if (!state.isDrawing) return;
     e.preventDefault();
+
+    if (state.mode === 'eraser') {
+      const pos = getPos(e);
+      eraseAtPoint(pos);
+      updateEraserCursor(e);
+      return;
+    }
+
+    if (!state.currentPath) return;
     const pos = getPos(e);
     state.currentPath.points.push(pos);
     const pressure = pos.pressure || 0.5;
@@ -659,10 +713,16 @@
   }
 
   function endDraw(e) {
-    if (!state.isDrawing || !state.currentPath) return;
+    if (!state.isDrawing) return;
     e.preventDefault();
     state.isDrawing = false;
-    if (state.currentPath.points.length > 1) {
+
+    if (state.mode === 'eraser') {
+      eraserCursor.classList.remove('show');
+      return;
+    }
+
+    if (state.currentPath && state.currentPath.points.length > 1) {
       state.currentPath.points = simplifyPath(state.currentPath.points, 1.0);
       state.undoStack.push(state.paths.map(p => ({...p, points: [...p.points]})));
       state.paths.push(state.currentPath);
@@ -671,6 +731,86 @@
     state.currentPath = null;
     drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
     redrawDisplay();
+  }
+
+  // ── Eraser ──
+  function updateEraserCursor(e) {
+    eraserCursor.style.width = state.eraserRadius * 2 + 'px';
+    eraserCursor.style.height = state.eraserRadius * 2 + 'px';
+    eraserCursor.style.left = e.clientX + 'px';
+    eraserCursor.style.top = e.clientY + 'px';
+    eraserCursor.classList.add('show');
+  }
+
+  // Minimum distance from point P to segment AB
+  function pointToSegmentDist(p, a, b) {
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const lenSq = dx * dx + dy * dy;
+    if (lenSq === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+    let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+  }
+
+  function eraseAtPoint(pos) {
+    const r = state.eraserRadius;
+    let changed = false;
+    const newPaths = [];
+
+    for (const path of state.paths) {
+      const pts = path.points;
+      if (pts.length < 2) { newPaths.push(path); continue; }
+
+      // For each segment, check if it passes within eraser radius.
+      // Mark each segment as erased or kept.
+      const segErased = [];
+      for (let i = 0; i < pts.length - 1; i++) {
+        const d = pointToSegmentDist(pos, pts[i], pts[i + 1]);
+        segErased.push(d <= r);
+      }
+
+      // If nothing erased, keep path as-is
+      if (!segErased.includes(true)) {
+        newPaths.push(path);
+        continue;
+      }
+
+      changed = true;
+
+      // Build fragments from consecutive non-erased segments
+      let fragStart = null;
+      for (let i = 0; i < segErased.length; i++) {
+        if (!segErased[i]) {
+          if (fragStart === null) fragStart = i;
+        } else {
+          if (fragStart !== null) {
+            // Fragment covers segments fragStart..i-1, so points fragStart..i
+            const fragPts = pts.slice(fragStart, i + 1);
+            if (fragPts.length >= 2) {
+              newPaths.push({ points: fragPts, strokeWidth: path.strokeWidth });
+            }
+            fragStart = null;
+          }
+        }
+      }
+      // Flush trailing fragment
+      if (fragStart !== null) {
+        const fragPts = pts.slice(fragStart, pts.length);
+        if (fragPts.length >= 2) {
+          newPaths.push({ points: fragPts, strokeWidth: path.strokeWidth });
+        }
+      }
+    }
+
+    if (changed) {
+      if (!state._eraserUndoSaved) {
+        state.undoStack.push(state.paths.map(p => ({...p, points: [...p.points]})));
+        state._eraserUndoSaved = true;
+      }
+      state.paths = newPaths;
+      updateUI();
+      redrawDisplay();
+    }
   }
 
   // ── RDP simplification ──
@@ -916,6 +1056,39 @@
     const btn = document.getElementById('btnPencilOnly');
     btn.classList.toggle('active', state.pencilOnly);
     btn.querySelector('span').textContent = state.pencilOnly ? '✏️ Pencilのみ' : '✏️ 全入力';
+  });
+
+  // ── Mode switching ──
+  function setMode(mode) {
+    state.mode = mode;
+    const penBtn = document.getElementById('btnModePen');
+    const eraserBtn = document.getElementById('btnModeEraser');
+    penBtn.style.borderColor = mode === 'pen' ? 'var(--accent)' : 'var(--border)';
+    penBtn.style.color = mode === 'pen' ? 'var(--accent)' : 'var(--text-primary)';
+    penBtn.style.boxShadow = mode === 'pen' ? '0 0 8px var(--accent-glow)' : 'none';
+    eraserBtn.style.borderColor = mode === 'eraser' ? 'var(--danger)' : 'var(--border)';
+    eraserBtn.style.color = mode === 'eraser' ? 'var(--danger)' : 'var(--text-primary)';
+    eraserBtn.style.boxShadow = mode === 'eraser' ? '0 0 8px var(--danger-glow)' : 'none';
+    drawCanvas.style.cursor = mode === 'eraser' ? 'none' : 'crosshair';
+    if (mode !== 'eraser') eraserCursor.classList.remove('show');
+  }
+
+  document.getElementById('btnModePen').addEventListener('click', () => setMode('pen'));
+  document.getElementById('btnModeEraser').addEventListener('click', () => setMode('eraser'));
+
+  // Show eraser cursor on hover (even when not drawing)
+  drawCanvas.addEventListener('pointermove', (e) => {
+    if (state.mode === 'eraser' && !state.isDrawing) {
+      if (state.pencilOnly && e.pointerType !== 'pen') return;
+      eraserCursor.style.width = state.eraserRadius * 2 + 'px';
+      eraserCursor.style.height = state.eraserRadius * 2 + 'px';
+      eraserCursor.style.left = e.clientX + 'px';
+      eraserCursor.style.top = e.clientY + 'px';
+      eraserCursor.classList.add('show');
+    }
+  });
+  drawCanvas.addEventListener('pointerleave', () => {
+    if (state.mode === 'eraser') eraserCursor.classList.remove('show');
   });
 
   document.getElementById('btnUndo').addEventListener('click', () => {
