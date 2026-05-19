@@ -466,16 +466,37 @@
   }
   .eraser-cursor.show { display: block; }
 
-  /* ── Mode button active state ── */
-  .btn-mode-active {
-    border-color: var(--accent) !important;
-    color: var(--accent) !important;
-    box-shadow: 0 0 8px var(--accent-glow) !important;
+  /* ── Cute popup toast ── */
+  .candy-toast {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.7);
+    padding: 20px 32px;
+    background: linear-gradient(135deg, #ff6bca, #c84dff, #6be8ff);
+    color: #fff;
+    border-radius: 24px;
+    font-family: 'Baloo 2', 'Noto Sans JP', sans-serif;
+    font-size: 18px;
+    font-weight: 700;
+    text-align: center;
+    z-index: 200;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.3s ease, transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+    box-shadow: 0 8px 40px rgba(255, 107, 202, 0.5), 0 0 60px rgba(107, 232, 255, 0.2);
+    line-height: 1.5;
+    max-width: 340px;
+    letter-spacing: 0.5px;
   }
-  .btn-eraser-active {
-    border-color: var(--danger) !important;
-    color: var(--danger) !important;
-    box-shadow: 0 0 8px var(--danger-glow) !important;
+  .candy-toast.show {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  .candy-toast .toast-emoji {
+    font-size: 36px;
+    display: block;
+    margin-bottom: 6px;
   }
 </style>
 </head>
@@ -557,6 +578,10 @@
 <div class="pen-indicator" id="penIndicator">✏️ Pencil 検出</div>
 <div class="touch-blocked" id="touchBlocked">🖐 指タッチはブロック中（Pencilのみモード）</div>
 <div class="eraser-cursor" id="eraserCursor"></div>
+<div class="candy-toast" id="candyToast">
+  <span class="toast-emoji">🍬</span>
+  <span id="candyToastMsg">ぬりつぶしはできないよ！</span>
+</div>
 
 <div class="modal-overlay" id="gcodeModal">
   <div class="modal">
@@ -580,6 +605,10 @@
     <div class="modal-row">
       <label>総吐出量 (E)</label>
       <span id="modalExtrusion" style="font-family:'IBM Plex Mono';color:var(--yellow);">0mm</span>
+    </div>
+    <div class="modal-row" id="filledWarningRow" style="display:none;">
+      <label style="color:var(--yellow);">⚠️ ぬりつぶし検出</label>
+      <span id="modalFilled" style="font-family:'Noto Sans JP';font-size:12px;color:var(--yellow);">重なった線を間引きしたよ</span>
     </div>
     <div class="gcode-preview" id="gcodePreview"></div>
     <div class="modal-actions">
@@ -722,15 +751,108 @@
       return;
     }
 
-    if (state.currentPath && state.currentPath.points.length > 1) {
-      state.currentPath.points = simplifyPath(state.currentPath.points, 1.0);
+    if (!state.currentPath) {
+      drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+      return;
+    }
+
+    const pts = state.currentPath.points;
+
+    // Calculate stroke length in canvas pixels
+    let canvasLen = 0;
+    for (let i = 1; i < pts.length; i++) {
+      canvasLen += Math.hypot(pts[i].x - pts[i-1].x, pts[i].y - pts[i-1].y);
+    }
+
+    // Convert 5mm threshold to canvas pixels
+    const canvasW = parseFloat(displayCanvas.style.width);
+    const pxPerMm = canvasW / 120; // bed is 120mm
+    const dotThresholdPx = 5 * pxPerMm;
+
+    // Dot detection: total length ≤ 5mm equivalent (but not single point / no movement)
+    if (pts.length >= 2 && canvasLen <= dotThresholdPx) {
+      // Convert to a 4mm diameter circle centered at the centroid
+      const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+      const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+      const radiusPx = (5 / 2) * pxPerMm; // 2.5mm radius in canvas px
+      const circlePoints = [];
+      const steps = 24;
+      for (let i = 0; i <= steps; i++) {
+        const angle = (i / steps) * Math.PI * 2;
+        circlePoints.push({
+          x: cx + Math.cos(angle) * radiusPx,
+          y: cy + Math.sin(angle) * radiusPx,
+          pressure: 0.5
+        });
+      }
+      state.currentPath.points = circlePoints;
+      state.currentPath._isDotCircle = true;
+
+      showCandyToast('ちいさい点は まるに\nへんかんしたよ ⭕');
+
       state.undoStack.push(state.paths.map(p => ({...p, points: [...p.points]})));
       state.paths.push(state.currentPath);
       updateUI();
+      state.currentPath = null;
+      drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+      redrawDisplay();
+      return;
     }
+
+    // Simplify normal strokes
+    state.currentPath.points = simplifyPath(pts, 1.0);
+
+    // Self-intersection check: if a single stroke crosses itself ≥5 times, reject it
+    const selfIx = countSelfIntersections(state.currentPath.points);
+    if (selfIx >= 5) {
+      showCandyToast('ぬりつぶしはできないよ！\nせんでかいてみてね 🖊');
+      state.currentPath = null;
+      drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+      return;
+    }
+
+    state.undoStack.push(state.paths.map(p => ({...p, points: [...p.points]})));
+    state.paths.push(state.currentPath);
+    updateUI();
     state.currentPath = null;
     drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
     redrawDisplay();
+  }
+
+  // ── Self-intersection counter for a single stroke ──
+  function segIntersects(a1, a2, b1, b2) {
+    const d1x = a2.x - a1.x, d1y = a2.y - a1.y;
+    const d2x = b2.x - b1.x, d2y = b2.y - b1.y;
+    const cross = d1x * d2y - d1y * d2x;
+    if (Math.abs(cross) < 1e-10) return false;
+    const t = ((b1.x - a1.x) * d2y - (b1.y - a1.y) * d2x) / cross;
+    const u = ((b1.x - a1.x) * d1y - (b1.y - a1.y) * d1x) / cross;
+    return t > 0.01 && t < 0.99 && u > 0.01 && u < 0.99;
+  }
+
+  function countSelfIntersections(pts) {
+    let count = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+      // Skip adjacent segments (they share a point)
+      for (let j = i + 2; j < pts.length - 1; j++) {
+        if (i === 0 && j === pts.length - 2) continue; // skip closed-loop check
+        if (segIntersects(pts[i], pts[i + 1], pts[j], pts[j + 1])) {
+          count++;
+          if (count >= 5) return count; // early exit
+        }
+      }
+    }
+    return count;
+  }
+
+  // ── Candy toast popup ──
+  let candyToastTimer = null;
+  function showCandyToast(msg) {
+    const toast = document.getElementById('candyToast');
+    document.getElementById('candyToastMsg').innerHTML = msg.replace(/\n/g, '<br>');
+    toast.classList.add('show');
+    clearTimeout(candyToastTimer);
+    candyToastTimer = setTimeout(() => toast.classList.remove('show'), 2000);
   }
 
   // ── Eraser ──
@@ -882,105 +1004,196 @@
 
   // ── G-Code ──
 
-  // Convert canvas coords to bed coords
+  // ── Geometry helpers ──
   function toBed(pt, canvasH, scaleX, scaleY) {
     return { x: pt.x * scaleX, y: (canvasH - pt.y) * scaleY };
   }
-
-  // Distance between two points
   function dist2D(a, b) {
     return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
   }
+  function strokeLength(pts) {
+    let len = 0;
+    for (let i = 1; i < pts.length; i++) len += dist2D(pts[i - 1], pts[i]);
+    return len;
+  }
 
-  // ── Path Optimization ──
-  function optimizePaths(paths, canvasH, scaleX, scaleY, mergeThreshold) {
-    if (paths.length === 0) return [];
+  // ── 1. Dot detection (≤ 0.5mm in bed coords) ──
+  function classifyDotStrokes(segments) {
+    const DOT_THRESHOLD = 5.0; // mm — matches draw-time circle conversion
+    return segments.map(seg => ({
+      points: seg,
+      isDot: strokeLength(seg) <= DOT_THRESHOLD
+    }));
+  }
 
-    // 1) Convert all paths to bed-coordinate segments
-    let segments = paths
-      .filter(p => p.points.length >= 2)
-      .map(p => p.points.map(pt => toBed(pt, canvasH, scaleX, scaleY)));
+  // ── 2. Overlap / fill detection (intersection density culling) ──
+  // Line segment intersection test: returns intersection point or null
+  function segSegIntersection(a1, a2, b1, b2) {
+    const d1x = a2.x - a1.x, d1y = a2.y - a1.y;
+    const d2x = b2.x - b1.x, d2y = b2.y - b1.y;
+    const cross = d1x * d2y - d1y * d2x;
+    if (Math.abs(cross) < 1e-10) return null;
+    const t = ((b1.x - a1.x) * d2y - (b1.y - a1.y) * d2x) / cross;
+    const u = ((b1.x - a1.x) * d1y - (b1.y - a1.y) * d1x) / cross;
+    if (t < 0 || t > 1 || u < 0 || u > 1) return null;
+    return { x: a1.x + t * d1x, y: a1.y + t * d1y };
+  }
 
+  function cullOverlappingStrokes(segments) {
+    const DENSITY_RADIUS = 10;  // mm
+    const DENSITY_THRESHOLD = 5; // intersections within radius
+
+    if (segments.length <= 1) return { culled: segments, wasFilled: false };
+
+    // Collect all intersection points between different strokes
+    const intersections = [];
+    // Track which strokes each intersection involves
+    const interStrokeMap = []; // { point, strokeA, strokeB }
+
+    for (let a = 0; a < segments.length; a++) {
+      for (let b = a + 1; b < segments.length; b++) {
+        const segA = segments[a], segB = segments[b];
+        for (let i = 0; i < segA.length - 1; i++) {
+          for (let j = 0; j < segB.length - 1; j++) {
+            const ip = segSegIntersection(segA[i], segA[i + 1], segB[j], segB[j + 1]);
+            if (ip) {
+              intersections.push(ip);
+              interStrokeMap.push({ point: ip, strokeA: a, strokeB: b });
+            }
+          }
+        }
+      }
+    }
+
+    if (intersections.length < DENSITY_THRESHOLD) {
+      return { culled: segments, wasFilled: false };
+    }
+
+    // Find dense clusters: for each intersection, count neighbors within radius
+    const densePoints = [];
+    for (const ip of intersections) {
+      let count = 0;
+      for (const other of intersections) {
+        if (dist2D(ip, other) <= DENSITY_RADIUS) count++;
+      }
+      if (count >= DENSITY_THRESHOLD) densePoints.push(ip);
+    }
+
+    if (densePoints.length === 0) {
+      return { culled: segments, wasFilled: false };
+    }
+
+    // Find all strokes involved in dense areas
+    const strokesInDenseArea = new Set();
+    for (const entry of interStrokeMap) {
+      for (const dp of densePoints) {
+        if (dist2D(entry.point, dp) <= DENSITY_RADIUS) {
+          strokesInDenseArea.add(entry.strokeA);
+          strokesInDenseArea.add(entry.strokeB);
+          break;
+        }
+      }
+    }
+
+    // Keep the first (earliest-drawn) stroke in each dense cluster, remove rest
+    const sortedDenseStrokes = [...strokesInDenseArea].sort((a, b) => a - b);
+    const keepFirst = sortedDenseStrokes.length > 0 ? sortedDenseStrokes[0] : -1;
+    const toRemove = new Set(sortedDenseStrokes.filter(i => i !== keepFirst));
+
+    const culled = segments.filter((_, i) => !toRemove.has(i));
+    return { culled, wasFilled: toRemove.size > 0 };
+  }
+
+  // ── Path optimization (reorder + merge) ──
+  function optimizePaths(segments, mergeThreshold) {
     if (segments.length === 0) return [];
+    if (segments.length === 1) return segments;
 
-    // 2) Nearest Neighbor with Flip — reorder to minimize travel
+    // Nearest Neighbor with Flip
     const ordered = [];
     const used = new Array(segments.length).fill(false);
-
-    // Pick first segment
     used[0] = true;
     ordered.push(segments[0]);
 
     for (let n = 1; n < segments.length; n++) {
-      const lastPt = ordered[ordered.length - 1];
-      const curEnd = lastPt[lastPt.length - 1];
-
+      const curEnd = ordered[ordered.length - 1];
+      const endPt = curEnd[curEnd.length - 1];
       let bestIdx = -1, bestDist = Infinity, bestFlip = false;
 
       for (let i = 0; i < segments.length; i++) {
         if (used[i]) continue;
         const seg = segments[i];
-        const dStart = dist2D(curEnd, seg[0]);
-        const dEnd = dist2D(curEnd, seg[seg.length - 1]);
-
-        if (dStart < bestDist) {
-          bestDist = dStart; bestIdx = i; bestFlip = false;
-        }
-        if (dEnd < bestDist) {
-          bestDist = dEnd; bestIdx = i; bestFlip = true;
-        }
+        const dS = dist2D(endPt, seg[0]);
+        const dE = dist2D(endPt, seg[seg.length - 1]);
+        if (dS < bestDist) { bestDist = dS; bestIdx = i; bestFlip = false; }
+        if (dE < bestDist) { bestDist = dE; bestIdx = i; bestFlip = true; }
       }
 
       used[bestIdx] = true;
-      const chosen = bestFlip ? [...segments[bestIdx]].reverse() : segments[bestIdx];
-      ordered.push(chosen);
+      ordered.push(bestFlip ? [...segments[bestIdx]].reverse() : segments[bestIdx]);
     }
 
-    // 3) Merge segments whose endpoints are within threshold
+    // Merge close endpoints
     const merged = [ordered[0]];
     for (let i = 1; i < ordered.length; i++) {
       const prev = merged[merged.length - 1];
-      const prevEnd = prev[prev.length - 1];
-      const curStart = ordered[i][0];
-
-      if (dist2D(prevEnd, curStart) <= mergeThreshold) {
-        // Merge: append current segment (skip duplicate start point)
-        for (let j = 1; j < ordered[i].length; j++) {
-          prev.push(ordered[i][j]);
-        }
+      if (dist2D(prev[prev.length - 1], ordered[i][0]) <= mergeThreshold) {
+        for (let j = 1; j < ordered[i].length; j++) prev.push(ordered[i][j]);
       } else {
         merged.push(ordered[i]);
       }
     }
-
     return merged;
   }
 
+  // ── Master G-code generator ──
   function generateGCode() {
     if (state.paths.length === 0) return;
+
     const pitch = parseFloat(document.getElementById('layerPitch').value) || 1.5;
     const layers = parseInt(document.getElementById('layerCount').value) || 2;
-    const bedW = 140, bedH = 140;
+    const bedW = 120, bedH = 120;
     const nozzleDia = 0.4;
     const filamentDia = 1.75;
+    const normalFeedrate = 600;
+
     const canvasW = parseFloat(displayCanvas.style.width);
     const canvasH = parseFloat(displayCanvas.style.height);
     const scaleX = bedW / canvasW, scaleY = bedH / canvasH;
     const filamentArea = Math.PI * (filamentDia / 2) ** 2;
     const extMul = (nozzleDia * pitch) / filamentArea;
 
-    // Merge threshold: 2mm in bed coordinates
-    const mergeThreshold = 2.0;
-    const optimized = optimizePaths(state.paths, canvasH, scaleX, scaleY, mergeThreshold);
+    // Convert to bed coords
+    let bedSegments = state.paths
+      .filter(p => p.points.length >= 2)
+      .map(p => p.points.map(pt => toBed(pt, canvasH, scaleX, scaleY)));
 
+    if (bedSegments.length === 0) return;
+
+    // Step 1: Overlap culling
+    const { culled, wasFilled } = cullOverlappingStrokes(bedSegments);
+
+    // Step 2: Classify dots vs lines
+    const classified = classifyDotStrokes(culled);
+    const dotSegs = classified.filter(c => c.isDot);
+    const lineSegs = classified.filter(c => !c.isDot).map(c => c.points);
+
+    // Step 3: Optimize line order & merge
+    const optimized = optimizePaths(lineSegs, 2.0);
+
+    // Step 4: Generate G-code
     let totalE = 0;
+    const dotFeedrate = Math.round(normalFeedrate / 1.5);
     const L = [];
+
     L.push('; G-Code generated by おえかきキャンディラボ');
+    L.push(`; Powered by Byte Bites Inc.`);
     L.push(`; Original paths: ${state.paths.length}`);
-    L.push(`; Optimized paths: ${optimized.length} (merged within ${mergeThreshold}mm)`);
+    L.push(`; After overlap culling: ${culled.length}${wasFilled ? ' (fill detected — culled)' : ''}`);
+    L.push(`; Dots: ${dotSegs.length}, Lines: ${optimized.length}`);
     L.push(`; Layers: ${layers}, Pitch: ${pitch}mm`);
     L.push(`; Bed: ${bedW}x${bedH}mm`);
-    L.push(`; Nozzle: ${nozzleDia}mm, Filament: ${filamentDia}mm`);
+    L.push(`; Normal feedrate: F${normalFeedrate}, Dot feedrate: F${dotFeedrate}`);
     L.push(`; Extrusion multiplier: ${extMul.toFixed(5)} mm/mm`);
     L.push('');
     L.push('G21 ; mm units');
@@ -989,42 +1202,79 @@
     L.push('G28 ; home all axes');
     L.push('G92 E0 ; reset extruder');
     L.push('');
+
     for (let layer = 0; layer < layers; layer++) {
       const z = ((layer + 1) * pitch).toFixed(3);
       L.push(`; === Layer ${layer + 1} / ${layers} — Z=${z}mm ===`);
       L.push(`G1 Z${z} F300`);
       L.push('');
+
+      // ── Draw lines ──
       optimized.forEach((seg, pi) => {
         if (seg.length < 2) return;
         const f = seg[0];
-        L.push(`; Path ${pi + 1} (${seg.length} pts)`);
-        totalE -= 1.0;
-        L.push(`G1 E${totalE.toFixed(4)} F2400 ; retract`);
-        L.push(`G0 X${f.x.toFixed(3)} Y${f.y.toFixed(3)} ; move to start`);
-        totalE += 1.0;
-        L.push(`G1 E${totalE.toFixed(4)} F2400 ; un-retract`);
+        L.push(`; Line ${pi + 1} (${seg.length} pts)`);
+        L.push(`G1 Z${(parseFloat(z) + 1).toFixed(3)} F600 ; lift +1mm`);
+        L.push(`G0 X${f.x.toFixed(3)} Y${f.y.toFixed(3)} ; travel`);
+        L.push(`G1 Z${z} F600 ; lower to layer`);
         let px0 = f.x, py0 = f.y;
         for (let i = 1; i < seg.length; i++) {
           const pt = seg[i];
           totalE += Math.sqrt((pt.x - px0) ** 2 + (pt.y - py0) ** 2) * extMul;
-          L.push(`G1 X${pt.x.toFixed(3)} Y${pt.y.toFixed(3)} E${totalE.toFixed(4)} F600`);
+          L.push(`G1 X${pt.x.toFixed(3)} Y${pt.y.toFixed(3)} E${totalE.toFixed(4)} F${normalFeedrate}`);
           px0 = pt.x; py0 = pt.y;
         }
         L.push('');
       });
+
+      // ── Draw dots (dwell + slow feedrate) ──
+      dotSegs.forEach((dotEntry, di) => {
+        const pts = dotEntry.points;
+        const f = pts[0];
+        L.push(`; Dot ${di + 1}`);
+        L.push(`G1 Z${(parseFloat(z) + 1).toFixed(3)} F600 ; lift +1mm`);
+        L.push(`G0 X${f.x.toFixed(3)} Y${f.y.toFixed(3)} ; travel to dot`);
+        L.push(`G1 Z${z} F600 ; lower to layer`);
+        L.push(`G4 P500 ; dwell 0.5s for material flow`);
+        // If the dot has more than 1 point, draw at reduced speed
+        if (pts.length > 1) {
+          let px0 = f.x, py0 = f.y;
+          for (let i = 1; i < pts.length; i++) {
+            const pt = pts[i];
+            totalE += Math.sqrt((pt.x - px0) ** 2 + (pt.y - py0) ** 2) * extMul;
+            L.push(`G1 X${pt.x.toFixed(3)} Y${pt.y.toFixed(3)} E${totalE.toFixed(4)} F${dotFeedrate} ; slow dot`);
+            px0 = pt.x; py0 = pt.y;
+          }
+        }
+        L.push('');
+      });
     }
-    totalE -= 1.0;
-    L.push(`G1 E${totalE.toFixed(4)} F2400 ; final retract`);
+
     L.push('G0 Z10 ; lift');
     L.push('G28 X Y ; home XY');
     L.push('M84 ; disable motors');
     L.push('; end');
+
     state.gcodeResult = L.join('\n');
-    document.getElementById('modalPaths').textContent = `${state.paths.length} → ${optimized.length}（最適化後）`;
+
+    // Update modal
+    document.getElementById('modalPaths').textContent =
+      `${state.paths.length} → ${optimized.length + dotSegs.length}（最適化後）`;
     document.getElementById('modalPitch').textContent = pitch + 'mm';
     document.getElementById('modalLayers').textContent = layers;
     document.getElementById('modalLines').textContent = L.length;
     document.getElementById('modalExtrusion').textContent = totalE.toFixed(2) + 'mm';
+
+    // wasFilled warning
+    const warningRow = document.getElementById('filledWarningRow');
+    if (wasFilled) {
+      warningRow.style.display = 'flex';
+      document.getElementById('modalFilled').textContent =
+        '🍭 ぬりつぶしはできないよ！重なった線を間引きしたよ';
+    } else {
+      warningRow.style.display = 'none';
+    }
+
     const prev = L.slice(0, 40).join('\n');
     document.getElementById('gcodePreview').textContent = prev + (L.length > 40 ? '\n...' : '');
     document.getElementById('gcodeModal').classList.add('active');
