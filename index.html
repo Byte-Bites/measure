@@ -580,7 +580,7 @@
 <div class="eraser-cursor" id="eraserCursor"></div>
 <div class="candy-toast" id="candyToast">
   <span class="toast-emoji">🍬</span>
-  <span id="candyToastMsg">ぬりつぶしはできないよ！</span>
+  <span id="candyToastMsg"></span>
 </div>
 
 <div class="modal-overlay" id="gcodeModal">
@@ -605,10 +605,6 @@
     <div class="modal-row">
       <label>総吐出量 (E)</label>
       <span id="modalExtrusion" style="font-family:'IBM Plex Mono';color:var(--yellow);">0mm</span>
-    </div>
-    <div class="modal-row" id="filledWarningRow" style="display:none;">
-      <label style="color:var(--yellow);">⚠️ ぬりつぶし検出</label>
-      <span id="modalFilled" style="font-family:'Noto Sans JP';font-size:12px;color:var(--yellow);">重なった線を間引きしたよ</span>
     </div>
     <div class="gcode-preview" id="gcodePreview"></div>
     <div class="modal-actions">
@@ -802,47 +798,12 @@
     // Simplify normal strokes
     state.currentPath.points = simplifyPath(pts, 1.0);
 
-    // Self-intersection check: if a single stroke crosses itself ≥5 times, reject it
-    const selfIx = countSelfIntersections(state.currentPath.points);
-    if (selfIx >= 5) {
-      showCandyToast('ぬりつぶしはできないよ！\nせんでかいてみてね 🖊');
-      state.currentPath = null;
-      drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
-      return;
-    }
-
     state.undoStack.push(state.paths.map(p => ({...p, points: [...p.points]})));
     state.paths.push(state.currentPath);
     updateUI();
     state.currentPath = null;
     drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
     redrawDisplay();
-  }
-
-  // ── Self-intersection counter for a single stroke ──
-  function segIntersects(a1, a2, b1, b2) {
-    const d1x = a2.x - a1.x, d1y = a2.y - a1.y;
-    const d2x = b2.x - b1.x, d2y = b2.y - b1.y;
-    const cross = d1x * d2y - d1y * d2x;
-    if (Math.abs(cross) < 1e-10) return false;
-    const t = ((b1.x - a1.x) * d2y - (b1.y - a1.y) * d2x) / cross;
-    const u = ((b1.x - a1.x) * d1y - (b1.y - a1.y) * d1x) / cross;
-    return t > 0.01 && t < 0.99 && u > 0.01 && u < 0.99;
-  }
-
-  function countSelfIntersections(pts) {
-    let count = 0;
-    for (let i = 0; i < pts.length - 1; i++) {
-      // Skip adjacent segments (they share a point)
-      for (let j = i + 2; j < pts.length - 1; j++) {
-        if (i === 0 && j === pts.length - 2) continue; // skip closed-loop check
-        if (segIntersects(pts[i], pts[i + 1], pts[j], pts[j + 1])) {
-          count++;
-          if (count >= 5) return count; // early exit
-        }
-      }
-    }
-    return count;
   }
 
   // ── Candy toast popup ──
@@ -1026,84 +987,6 @@
     }));
   }
 
-  // ── 2. Overlap / fill detection (intersection density culling) ──
-  // Line segment intersection test: returns intersection point or null
-  function segSegIntersection(a1, a2, b1, b2) {
-    const d1x = a2.x - a1.x, d1y = a2.y - a1.y;
-    const d2x = b2.x - b1.x, d2y = b2.y - b1.y;
-    const cross = d1x * d2y - d1y * d2x;
-    if (Math.abs(cross) < 1e-10) return null;
-    const t = ((b1.x - a1.x) * d2y - (b1.y - a1.y) * d2x) / cross;
-    const u = ((b1.x - a1.x) * d1y - (b1.y - a1.y) * d1x) / cross;
-    if (t < 0 || t > 1 || u < 0 || u > 1) return null;
-    return { x: a1.x + t * d1x, y: a1.y + t * d1y };
-  }
-
-  function cullOverlappingStrokes(segments) {
-    const DENSITY_RADIUS = 10;  // mm
-    const DENSITY_THRESHOLD = 5; // intersections within radius
-
-    if (segments.length <= 1) return { culled: segments, wasFilled: false };
-
-    // Collect all intersection points between different strokes
-    const intersections = [];
-    // Track which strokes each intersection involves
-    const interStrokeMap = []; // { point, strokeA, strokeB }
-
-    for (let a = 0; a < segments.length; a++) {
-      for (let b = a + 1; b < segments.length; b++) {
-        const segA = segments[a], segB = segments[b];
-        for (let i = 0; i < segA.length - 1; i++) {
-          for (let j = 0; j < segB.length - 1; j++) {
-            const ip = segSegIntersection(segA[i], segA[i + 1], segB[j], segB[j + 1]);
-            if (ip) {
-              intersections.push(ip);
-              interStrokeMap.push({ point: ip, strokeA: a, strokeB: b });
-            }
-          }
-        }
-      }
-    }
-
-    if (intersections.length < DENSITY_THRESHOLD) {
-      return { culled: segments, wasFilled: false };
-    }
-
-    // Find dense clusters: for each intersection, count neighbors within radius
-    const densePoints = [];
-    for (const ip of intersections) {
-      let count = 0;
-      for (const other of intersections) {
-        if (dist2D(ip, other) <= DENSITY_RADIUS) count++;
-      }
-      if (count >= DENSITY_THRESHOLD) densePoints.push(ip);
-    }
-
-    if (densePoints.length === 0) {
-      return { culled: segments, wasFilled: false };
-    }
-
-    // Find all strokes involved in dense areas
-    const strokesInDenseArea = new Set();
-    for (const entry of interStrokeMap) {
-      for (const dp of densePoints) {
-        if (dist2D(entry.point, dp) <= DENSITY_RADIUS) {
-          strokesInDenseArea.add(entry.strokeA);
-          strokesInDenseArea.add(entry.strokeB);
-          break;
-        }
-      }
-    }
-
-    // Keep the first (earliest-drawn) stroke in each dense cluster, remove rest
-    const sortedDenseStrokes = [...strokesInDenseArea].sort((a, b) => a - b);
-    const keepFirst = sortedDenseStrokes.length > 0 ? sortedDenseStrokes[0] : -1;
-    const toRemove = new Set(sortedDenseStrokes.filter(i => i !== keepFirst));
-
-    const culled = segments.filter((_, i) => !toRemove.has(i));
-    return { culled, wasFilled: toRemove.size > 0 };
-  }
-
   // ── Path optimization (reorder + merge) ──
   function optimizePaths(segments, mergeThreshold) {
     if (segments.length === 0) return [];
@@ -1170,18 +1053,15 @@
 
     if (bedSegments.length === 0) return;
 
-    // Step 1: Overlap culling
-    const { culled, wasFilled } = cullOverlappingStrokes(bedSegments);
-
-    // Step 2: Classify dots vs lines
-    const classified = classifyDotStrokes(culled);
+    // Step 1: Classify dots vs lines
+    const classified = classifyDotStrokes(bedSegments);
     const dotSegs = classified.filter(c => c.isDot);
     const lineSegs = classified.filter(c => !c.isDot).map(c => c.points);
 
-    // Step 3: Optimize line order & merge
+    // Step 2: Optimize line order & merge
     const optimized = optimizePaths(lineSegs, 2.0);
 
-    // Step 4: Generate G-code
+    // Step 3: Generate G-code
     let totalE = 0;
     const dotFeedrate = Math.round(normalFeedrate / 1.5);
     const L = [];
@@ -1189,7 +1069,6 @@
     L.push('; G-Code generated by おえかきキャンディラボ');
     L.push(`; Powered by Byte Bites Inc.`);
     L.push(`; Original paths: ${state.paths.length}`);
-    L.push(`; After overlap culling: ${culled.length}${wasFilled ? ' (fill detected — culled)' : ''}`);
     L.push(`; Dots: ${dotSegs.length}, Lines: ${optimized.length}`);
     L.push(`; Layers: ${layers}, Pitch: ${pitch}mm`);
     L.push(`; Bed: ${bedW}x${bedH}mm`);
@@ -1201,6 +1080,17 @@
     L.push('M82 ; absolute extrusion');
     L.push('G28 ; home all axes');
     L.push('G92 E0 ; reset extruder');
+    L.push('');
+
+    // ── Priming line (outside visible canvas, Y=-5mm) ──
+    L.push('; === Priming line ===');
+    L.push(`G1 Z${pitch.toFixed(3)} F300`);
+    L.push('G0 X0 Y-5 ; move to priming start');
+    L.push(`G1 Z${pitch.toFixed(3)} F300`);
+    const primeLen = 30; // 30mm priming line
+    totalE += primeLen * extMul;
+    L.push(`G1 X${primeLen.toFixed(3)} Y-5 E${totalE.toFixed(4)} F${normalFeedrate} ; prime`);
+    L.push(`G1 Z${(pitch + 1).toFixed(3)} F600 ; lift after prime`);
     L.push('');
 
     for (let layer = 0; layer < layers; layer++) {
@@ -1264,16 +1154,6 @@
     document.getElementById('modalLayers').textContent = layers;
     document.getElementById('modalLines').textContent = L.length;
     document.getElementById('modalExtrusion').textContent = totalE.toFixed(2) + 'mm';
-
-    // wasFilled warning
-    const warningRow = document.getElementById('filledWarningRow');
-    if (wasFilled) {
-      warningRow.style.display = 'flex';
-      document.getElementById('modalFilled').textContent =
-        '🍭 ぬりつぶしはできないよ！重なった線を間引きしたよ';
-    } else {
-      warningRow.style.display = 'none';
-    }
 
     const prev = L.slice(0, 40).join('\n');
     document.getElementById('gcodePreview').textContent = prev + (L.length > 40 ? '\n...' : '');
